@@ -235,12 +235,23 @@ local function HighlightSubStringsByRGB(msg, entry, r, g, b)
   return msg, changed;
 end
 
+-- Newer clients (e.g. WoW Forever) read the "showTimestamps" setting through ChatFrameUtil;
+-- older clients store the format in the CHAT_TIMESTAMP_FORMAT global.
+local function TimestampsEnabled()
+  local ChatFrameUtil = _G.ChatFrameUtil;
+  if (ChatFrameUtil and ChatFrameUtil.GetTimestampFormat) then
+    return ChatFrameUtil.GetTimestampFormat() ~= nil;
+  end
+  return _G.CHAT_TIMESTAMP_FORMAT ~= nil;
+end
+
 local function HighlightText(text, highlighted)
   local time, prefix, body, playSound, changed;
+  local hasTimestamp = TimestampsEnabled();
 
   for _, pattern in ipairs(CHANNEL_PATTERNS) do
-    if (_G.CHAT_TIMESTAMP_FORMAT) then
-      time, prefix, body = text:match("(.-)" .. pattern);
+    if (hasTimestamp) then
+      time, prefix, body = text:match("^(.-)" .. pattern);
     else
       prefix, body = text:match("^" .. pattern);
     end
@@ -262,6 +273,10 @@ local function HighlightText(text, highlighted)
       else
         text = prefix .. body;
       end
+
+      -- stop at the first matching pattern, otherwise a channel message (with a timestamp
+      -- in front) also matches the second pattern and gets highlighted twice
+      break;
     end
   end
 

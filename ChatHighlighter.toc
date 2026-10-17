@@ -2,7 +2,7 @@
 ## Title: Chat Highlighter
 ## Notes: Highlights certain words in chat
 ## Author: Mayron
-## Version: 1.4.0
+## Version: 1.5.0
 ## Category: Chat
 ## SavedVariables: ChatHighlighterDB
 ## OptionalDeps: LibStub, CallbackHandler-1.0, Ace3

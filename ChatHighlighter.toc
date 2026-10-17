@@ -2,6 +2,12 @@
 ## Title: Chat Highlighter
 ## Notes: Highlights certain words in chat
 ## Author: Mayron
-## Version: 1.3.0
+## Version: 1.4.0
+## Category: Chat
+## SavedVariables: ChatHighlighterDB
+## OptionalDeps: LibStub, CallbackHandler-1.0, Ace3
 
+Libs\embeds.xml
+Defaults.lua
 ChatHighlighter.lua
+Options.lua

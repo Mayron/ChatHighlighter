@@ -3,7 +3,7 @@ local addonName, ns = ...;
 local _G = _G;
 local pairs, ipairs, type, tonumber = _G.pairs, _G.ipairs, _G.type, _G.tonumber;
 local unpack, PlaySound, CreateColor = _G.unpack, _G.PlaySound, _G.CreateColor;
-local UnitName, canaccessvalue = _G.UnitName, _G.canaccessvalue;
+local UnitName, select = _G.UnitName, _G.select;
 local strsplit, strtrim, tinsert, sort = _G.strsplit, _G.strtrim, _G.tinsert, _G.table.sort;
 
 -- Ordered list of highlight entries built from the saved settings by ns:CompileSettings().
@@ -68,6 +68,7 @@ end
 function ns:CompileSettings()
   local compiled = {};
   self.compiled = compiled;
+  self:ClearFilterCache(); -- settings changed, so cached results are stale
 
   if (not (self.db and self.db.profile.enabled)) then return end
   local profile = self.db.profile;
@@ -109,14 +110,11 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
 
     ns.db = _G.LibStub("AceDB-3.0"):New("ChatHighlighterDB", ns.defaults, true);
     ns:SetupOptions();
+    ns:RegisterChatFilters();
   end
 
   ns:CompileSettings();
 end);
-
-local CHANNEL_PATTERNS = {
-  "(|Hchannel:.-|h%[.-%]|h |Hplayer:.-|h%[.-%]|h: )(.*)";
-  "(|Hplayer:.-|h%[.-%]|h.-: )(.*)"};
 
 -- Escape sequences that must never be edited: hidden link data, colour codes, textures and atlases.
 local ESCAPE_PATTERNS = { "|H.-|h", "|c%x%x%x%x%x%x%x%x", "|r", "|T.-|t", "|A.-|a" };
@@ -235,75 +233,74 @@ local function HighlightSubStringsByRGB(msg, entry, r, g, b)
   return msg, changed;
 end
 
--- Newer clients (e.g. WoW Forever) read the "showTimestamps" setting through ChatFrameUtil;
--- older clients store the format in the CHAT_TIMESTAMP_FORMAT global.
-local function TimestampsEnabled()
+-- Chat events whose message text is highlighted. BATTLEGROUND events only exist on older clients.
+local CHAT_EVENTS = {
+  "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER",
+  "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_RAID_WARNING",
+  "CHAT_MSG_INSTANCE_CHAT", "CHAT_MSG_INSTANCE_CHAT_LEADER", "CHAT_MSG_BATTLEGROUND", "CHAT_MSG_BATTLEGROUND_LEADER",
+  "CHAT_MSG_WHISPER",
+};
+
+-- The filter runs once per chat window showing a message, so the last result is cached
+-- by line ID and the sound only plays once per line.
+local lastLineId, lastInput, lastOutput;
+local lastSoundLineId;
+
+function ns:ClearFilterCache()
+  lastLineId, lastInput, lastOutput = nil, nil, nil;
+end
+
+local function HighlightMessage(msg)
+  local playSound, changed, anyChanged;
+
+  for _, entry in ipairs(ns.compiled) do
+    msg, changed = HighlightSubStringsByRGB(msg, entry, unpack(entry.color));
+
+    if (changed) then
+      anyChanged = true;
+      if (type(entry.sound) == "number" and not playSound) then
+        playSound = entry.sound; -- first sound only
+      end
+    end
+  end
+
+  return anyChanged and msg or nil, playSound;
+end
+
+-- Blizzard runs message event filters in isolation (securecallfunction) and skips them when
+-- any argument is secret, so unlike replacing ChatFrame:AddMessage this cannot taint the chat
+-- frame (which caused "cannot be accessed while tainted" errors in battlegrounds).
+local function ChatFilter(_, _, msg, ...)
+  if (type(msg) ~= "string" or #ns.compiled == 0) then return false; end
+
+  local lineId = select(10, ...); -- arg11
+  local output;
+
+  if (lineId and lineId == lastLineId and msg == lastInput) then
+    output = lastOutput;
+  else
+    local playSound;
+    output, playSound = HighlightMessage(msg);
+    lastLineId, lastInput, lastOutput = lineId, msg, output;
+
+    if (playSound and (not lineId or lineId ~= lastSoundLineId)) then
+      lastSoundLineId = lineId;
+      PlaySound(playSound);
+    end
+  end
+
+  if (output) then
+    return false, output, ...;
+  end
+
+  return false;
+end
+
+function ns:RegisterChatFilters()
   local ChatFrameUtil = _G.ChatFrameUtil;
-  if (ChatFrameUtil and ChatFrameUtil.GetTimestampFormat) then
-    return ChatFrameUtil.GetTimestampFormat() ~= nil;
-  end
-  return _G.CHAT_TIMESTAMP_FORMAT ~= nil;
-end
+  local AddFilter = (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter) or _G.ChatFrame_AddMessageEventFilter;
 
-local function HighlightText(text, highlighted)
-  local time, prefix, body, playSound, changed;
-  local hasTimestamp = TimestampsEnabled();
-
-  for _, pattern in ipairs(CHANNEL_PATTERNS) do
-    if (hasTimestamp) then
-      time, prefix, body = text:match("^(.-)" .. pattern);
-    else
-      prefix, body = text:match("^" .. pattern);
-    end
-
-    if (prefix and body) then
-      body = body:trim();
-
-      -- highlight words of interest:
-      for _, value in ipairs(highlighted) do
-        body, changed = HighlightSubStringsByRGB(body, value, unpack(value.color));
-
-        if (changed and type(value.sound) == "number" and not playSound) then
-          playSound = value.sound; -- first sound only
-        end
-      end
-
-      if (time) then
-        text = time .. prefix .. body;
-      else
-        text = prefix .. body;
-      end
-
-      -- stop at the first matching pattern, otherwise a channel message (with a timestamp
-      -- in front) also matches the second pattern and gets highlighted twice
-      break;
-    end
-  end
-
-  if (playSound) then
-    PlaySound(playSound);
-  end
-
-  return text;
-end
-
-local function NewAddMessage(self, text, ...)
-  if (not text) then return; end
-
-  -- secret (restricted) chat text cannot be inspected by addons, so pass it through untouched
-  if (not canaccessvalue or canaccessvalue(text)) then
-    text = HighlightText(text, ns.compiled);
-  end
-
-  self:oldAddMessage(text, ...);
-end
-
-for _, chatFrameName in ipairs(_G.CHAT_FRAMES) do
-  local chatFrame = _G[chatFrameName];
-
-  if (chatFrame:GetID() ~= 2) then
-    -- if not combat log...
-    chatFrame.oldAddMessage = chatFrame.AddMessage;
-    chatFrame.AddMessage = NewAddMessage;
+  for _, event in ipairs(CHAT_EVENTS) do
+    AddFilter(event, ChatFilter);
   end
 end
